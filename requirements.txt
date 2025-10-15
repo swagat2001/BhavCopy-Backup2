@@ -1,0 +1,7 @@
+sqlalchemy
+pandas
+numpy
+psycopg2-binary
+py_vollib
+py_lets_be_rational
+flask
