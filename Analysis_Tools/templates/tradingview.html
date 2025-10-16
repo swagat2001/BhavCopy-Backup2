@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Options Trading Chart - TradingView</title>
+    <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #0f0f0f;
+            color: #d1d4dc;
+        }
+
+        .header {
+            background: #1c1c1c;
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #2a2e39;
+        }
+
+        .header h1 {
+            font-size: 20px;
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+
+        select, button {
+            background: #2a2e39;
+            border: 1px solid #434651;
+            color: #d1d4dc;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        select:hover, button:hover {
+            background: #363a45;
+            border-color: #5c6370;
+        }
+
+        button:active {
+            transform: scale(0.98);
+        }
+
+        .back-button {
+            background: #2962ff;
+            border-color: #2962ff;
+            color: white;
+            font-weight: 500;
+        }
+
+        .back-button:hover {
+            background: #1e53e5;
+        }
+
+        .chart-container {
+            display: flex;
+            height: calc(100vh - 60px);
+            gap: 10px;
+            padding: 10px;
+        }
+
+        .main-chart {
+            flex: 2;
+            background: #1c1c1c;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid #2a2e39;
+        }
+
+        .indicators-panel {
+            flex: 1;
+            background: #1c1c1c;
+            border-radius: 8px;
+            padding: 20px;
+            border: 1px solid #2a2e39;
+            overflow-y: auto;
+        }
+
+        .indicators-panel h3 {
+            margin-bottom: 20px;
+            color: #ffffff;
+            font-size: 16px;
+        }
+
+        .indicator-item {
+            background: #2a2e39;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            border: 1px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .indicator-item:hover {
+            border-color: #2962ff;
+        }
+
+        .indicator-item h4 {
+            color: #ffffff;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+
+        .indicator-value {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            margin-top: 5px;
+        }
+
+        .indicator-value span:last-child {
+            font-weight: 600;
+        }
+
+        .positive {
+            color: #26a69a;
+        }
+
+        .negative {
+            color: #ef5350;
+        }
+
+        #chart {
+            width: 100%;
+            height: 100%;
+        }
+
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100%;
+            color: #888;
+            font-size: 18px;
+        }
+
+        .toolbar {
+            background: #2a2e39;
+            padding: 10px 20px;
+            display: flex;
+            gap: 10px;
+            border-bottom: 1px solid #434651;
+        }
+
+        .toolbar button {
+            padding: 6px 12px;
+            font-size: 13px;
+        }
+
+        .toolbar button.active {
+            background: #2962ff;
+            border-color: #2962ff;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📈 Options Trading Chart - Advanced Analytics</h1>
+        <div class="controls">
+            <select id="tickerSelect">
+                <option value="">Select Ticker</option>
+                <option value="NIFTY">NIFTY</option>
+                <option value="BANKNIFTY">BANKNIFTY</option>
+                <option value="RELIANCE">RELIANCE</option>
+                <option value="TCS">TCS</option>
+                <option value="INFY">INFY</option>
+                <option value="HDFC">HDFC</option>
+            </select>
+            <select id="dateSelect">
+                <option value="">Select Date</option>
+            </select>
+            <button class="back-button" onclick="window.location.href='/'">← Back to Dashboard</button>
+        </div>
+    </div>
+
+    <div class="chart-container">
+        <div class="main-chart">
+            <div class="toolbar">
+                <button class="active" data-type="candlestick">Candlestick</button>
+                <button data-type="line">Line</button>
+                <button data-type="area">Area</button>
+                <button data-type="bar">Bar</button>
+            </div>
+            <div id="chart"></div>
+        </div>
+        
+        <div class="indicators-panel">
+            <h3>Technical Indicators</h3>
+            
+            <div class="indicator-item">
+                <h4>📊 Price Action</h4>
+                <div class="indicator-value">
+                    <span>Open:</span>
+                    <span id="ind-open">-</span>
+                </div>
+                <div class="indicator-value">
+                    <span>High:</span>
+                    <span id="ind-high" class="positive">-</span>
+                </div>
+                <div class="indicator-value">
+                    <span>Low:</span>
+                    <span id="ind-low" class="negative">-</span>
+                </div>
+                <div class="indicator-value">
+                    <span>Close:</span>
+                    <span id="ind-close">-</span>
+                </div>
+                <div class="indicator-value">
+                    <span>Change:</span>
+                    <span id="ind-change">-</span>
+                </div>
+            </div>
+
+            <div class="indicator-item">
+                <h4>📈 PCR Indicators</h4>
+                <div class="indicator-value">
+                    <span>PCR (Volume):</span>
+                    <span id="ind-pcr-vol">-</span>
+                </div>
+                <div class="indicator-value">
+                    <span>PCR (OI):</span>
+                    <span id="ind-pcr-oi">-</span>
+                </div>
+            </div>
+
+            <div class="indicator-item">
+                <h4>📉 Greeks Summary</h4>
+                <div class="indicator-value">
+                    <span>Avg Delta:</span>
+                    <span id="ind-delta">-</span>
+                </div>
+                <div class="indicator-value">
+                    <span>Avg Vega:</span>
+                    <span id="ind-vega">-</span>
+                </div>
+                <div class="indicator-value">
+                    <span>Avg Theta:</span>
+                    <span id="ind-theta">-</span>
+                </div>
+            </div>
+
+            <div class="indicator-item">
+                <h4>💰 Volume Analysis</h4>
+                <div class="indicator-value">
+                    <span>Total Volume:</span>
+                    <span id="ind-volume">-</span>
+                </div>
+                <div class="indicator-value">
+                    <span>Total OI:</span>
+                    <span id="ind-oi">-</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let chart;
+        let candlestickSeries;
+        let currentChartType = 'candlestick';
+
+        // Initialize chart
+        function initChart() {
+            const chartElement = document.getElementById('chart');
+            chart = LightweightCharts.createChart(chartElement, {
+                width: chartElement.clientWidth,
+                height: chartElement.clientHeight - 50,
+                layout: {
+                    background: { color: '#1c1c1c' },
+                    textColor: '#d1d4dc',
+                },
+                grid: {
+                    vertLines: { color: '#2a2e39' },
+                    horzLines: { color: '#2a2e39' },
+                },
+                crosshair: {
+                    mode: LightweightCharts.CrosshairMode.Normal,
+                },
+                rightPriceScale: {
+                    borderColor: '#2a2e39',
+                },
+                timeScale: {
+                    borderColor: '#2a2e39',
+                    timeVisible: true,
+                },
+            });
+
+            candlestickSeries = chart.addCandlestickSeries({
+                upColor: '#26a69a',
+                downColor: '#ef5350',
+                borderVisible: false,
+                wickUpColor: '#26a69a',
+                wickDownColor: '#ef5350',
+            });
+
+            // Handle window resize
+            window.addEventListener('resize', () => {
+                chart.applyOptions({
+                    width: chartElement.clientWidth,
+                    height: chartElement.clientHeight - 50
+                });
+            });
+        }
+
+        // Load chart data
+        async function loadChartData(ticker, date) {
+            try {
+                const response = await fetch(`/get_tradingview_data?ticker=${ticker}&date=${date}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    alert('Error: ' + data.error);
+                    return;
+                }
+
+                // Update chart
+                candlestickSeries.setData(data.candles);
+
+                // Update indicators
+                updateIndicators(data.indicators);
+
+            } catch (error) {
+                alert('Error loading data: ' + error);
+            }
+        }
+
+        // Update indicators panel
+        function updateIndicators(ind) {
+            document.getElementById('ind-open').textContent = ind.open?.toFixed(2) || '-';
+            document.getElementById('ind-high').textContent = ind.high?.toFixed(2) || '-';
+            document.getElementById('ind-low').textContent = ind.low?.toFixed(2) || '-';
+            document.getElementById('ind-close').textContent = ind.close?.toFixed(2) || '-';
+            
+            const change = ind.change || 0;
+            const changeEl = document.getElementById('ind-change');
+            changeEl.textContent = `${change.toFixed(2)}%`;
+            changeEl.className = change >= 0 ? 'positive' : 'negative';
+
+            document.getElementById('ind-pcr-vol').textContent = ind.pcr_volume?.toFixed(4) || '-';
+            document.getElementById('ind-pcr-oi').textContent = ind.pcr_oi?.toFixed(4) || '-';
+            document.getElementById('ind-delta').textContent = ind.avg_delta?.toFixed(4) || '-';
+            document.getElementById('ind-vega').textContent = ind.avg_vega?.toFixed(4) || '-';
+            document.getElementById('ind-theta').textContent = ind.avg_theta?.toFixed(4) || '-';
+            document.getElementById('ind-volume').textContent = ind.total_volume?.toLocaleString() || '-';
+            document.getElementById('ind-oi').textContent = ind.total_oi?.toLocaleString() || '-';
+        }
+
+        // Chart type switcher
+        document.querySelectorAll('.toolbar button').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.toolbar button').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                // Chart type switching logic can be expanded here
+            });
+        });
+
+        // Event listeners
+        document.getElementById('tickerSelect').addEventListener('change', (e) => {
+            const ticker = e.target.value;
+            const date = document.getElementById('dateSelect').value;
+            if (ticker && date) {
+                loadChartData(ticker, date);
+            }
+        });
+
+        document.getElementById('dateSelect').addEventListener('change', (e) => {
+            const ticker = document.getElementById('tickerSelect').value;
+            const date = e.target.value;
+            if (ticker && date) {
+                loadChartData(ticker, date);
+            }
+        });
+
+        // Load available dates
+        async function loadDates() {
+            try {
+                const response = await fetch('/get_available_dates');
+                const dates = await response.json();
+                const select = document.getElementById('dateSelect');
+                dates.forEach(date => {
+                    const option = document.createElement('option');
+                    option.value = date;
+                    option.textContent = date;
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading dates:', error);
+            }
+        }
+
+        // Initialize
+        initChart();
+        loadDates();
+    </script>
+</body>
+</html>

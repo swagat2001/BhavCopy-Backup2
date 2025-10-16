@@ -1,0 +1,245 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', sans-serif;
+    background: #f5f7fa;
+    padding: 20px;
+}
+
+.container {
+    max-width: 2200px;
+    margin: 0 auto;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+    overflow: hidden;
+}
+
+.header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 30px;
+    text-align: center;
+}
+
+.header h1 {
+    font-size: 32px;
+    margin-bottom: 10px;
+}
+
+.header .date {
+    font-size: 18px;
+    opacity: 0.95;
+}
+
+.controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px;
+    background: #f8f9fa;
+    border-bottom: 2px solid #e9ecef;
+    flex-wrap: wrap;
+    gap: 15px;
+}
+
+.date-selector {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.date-selector select {
+    padding: 10px 15px;
+    border: 2px solid #667eea;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #667eea;
+    background: white;
+    cursor: pointer;
+}
+
+.date-selector button {
+    padding: 10px 20px;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.date-selector button:hover {
+    background: #5568d3;
+}
+
+.tabs {
+    display: flex;
+    gap: 10px;
+}
+
+.tab {
+    padding: 12px 30px;
+    border: none;
+    background: #e9ecef;
+    color: #495057;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: 600;
+    transition: all 0.3s;
+}
+
+.tab:hover {
+    background: #dee2e6;
+}
+
+.tab.active {
+    background: #667eea;
+    color: white;
+}
+
+.export-btn {
+    padding: 12px 25px;
+    background: #27ae60;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.export-btn:hover {
+    background: #229954;
+}
+
+.loading {
+    text-align: center;
+    padding: 60px;
+    color: #667eea;
+    font-size: 18px;
+}
+
+.tab-content {
+    display: none;
+    padding: 25px;
+    max-height: calc(100vh - 350px);
+    overflow-y: auto;
+    overflow-x: auto;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+table.dataTable {
+    width: 100% !important;
+    font-size: 12px;
+}
+
+table.dataTable thead {
+    background: #667eea;
+    color: white;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+table.dataTable thead th {
+    padding: 12px 8px;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 600;
+    border-right: 1px solid rgba(255,255,255,0.2);
+    position: sticky;
+    top: 0;
+    background: #667eea;
+}
+
+.call-header {
+    background: #27ae60 !important;
+}
+
+.put-header {
+    background: #e74c3c !important;
+}
+
+.stock-header {
+    background: #2c3e50 !important;
+}
+
+.closing-header {
+    background: #f39c12 !important;
+}
+
+table.dataTable tbody tr {
+    transition: all 0.2s;
+}
+
+table.dataTable tbody tr:hover {
+    background: #f1f3f5;
+}
+
+table.dataTable tbody tr:nth-child(even) {
+    background: #f8f9fa;
+}
+
+table.dataTable tbody td {
+    padding: 10px 8px;
+    border-bottom: 1px solid #e9ecef;
+    text-align: center;
+    font-size: 12px;
+}
+
+.stock-name {
+    font-weight: 700;
+    color: white;
+    text-align: left !important;
+    padding-left: 20px !important;
+    background: #2c3e50;
+}
+
+table.dataTable tbody tr:nth-child(even) .stock-name {
+    background: #34495e;
+}
+
+.closing-price {
+    font-weight: 700;
+    color: #f39c12;
+    font-size: 13px;
+}
+
+.strike-value {
+    font-weight: 600;
+    color: #495057;
+}
+
+.percentage {
+    font-size: 11px;
+    margin-left: 3px;
+    font-weight: 600;
+}
+
+.positive {
+    color: #27ae60;
+}
+
+.negative {
+    color: #e74c3c;
+}
+
+.footer {
+    text-align: center;
+    padding: 20px;
+    color: #6c757d;
+    font-size: 14px;
+    border-top: 1px solid #e9ecef;
+    background: #f8f9fa;
+}
