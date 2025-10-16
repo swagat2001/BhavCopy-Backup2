@@ -128,17 +128,26 @@ body {
 }
 
 .tab-content {
-    display: none;
+    display: block;  /* Always render */
+    visibility: hidden;  /* But hide when not active */
+    height: 0;  /* Collapse height */
+    overflow: hidden;
+    padding: 0;
+    transition: opacity 0.15s ease-in-out;
+}
+
+.tab-content.active {
+    visibility: visible;
+    height: auto;
     padding: 25px;
     max-height: calc(100vh - 350px);
     overflow-y: auto;
     overflow-x: auto;
+    min-height: 500px;
+    opacity: 1;
 }
 
-.tab-content.active {
-    display: block;
-}
-
+/* Fix table layout to prevent jumping */
 table.dataTable {
     width: 100% !important;
     font-size: 12px;
@@ -179,6 +188,10 @@ table.dataTable thead th {
     background: #f39c12 !important;
 }
 
+.rsi-header {
+    background: #673ab7 !important;
+}
+
 table.dataTable tbody tr {
     transition: all 0.2s;
 }
@@ -214,6 +227,25 @@ table.dataTable tbody tr:nth-child(even) .stock-name {
     font-weight: 700;
     color: #f39c12;
     font-size: 13px;
+}
+
+.rsi-value {
+    font-weight: 700;
+    font-size: 12px;
+}
+
+.rsi-overbought {
+    color: #e74c3c;
+    background: rgba(231, 76, 60, 0.1);
+}
+
+.rsi-oversold {
+    color: #27ae60;
+    background: rgba(39, 174, 96, 0.1);
+}
+
+.rsi-neutral {
+    color: #673ab7;
 }
 
 .strike-value {

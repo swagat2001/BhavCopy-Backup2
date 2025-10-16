@@ -50,18 +50,19 @@ async function loadData() {
         document.getElementById('otm-tab').innerHTML = generateTableHTML(data.otm, 'otm');
         document.getElementById('itm-tab').innerHTML = generateTableHTML(data.itm, 'itm');
         
-        // Reinitialize DataTables for ITM and OTM tabs with delay
-        setTimeout(() => {
-            totalTable = $('#table_total').DataTable({
+        // Reinitialize DataTables with proper configuration
+        // Initialize all tables immediately to prevent first-time sinking
+        totalTable = $('#table_total').DataTable({
             pageLength: 50,
             order: [[0, 'asc']],
             scrollX: true,
             scrollY: 'calc(100vh - 400px)',
             scrollCollapse: true,
             fixedHeader: true,
-            fixedColumns: { left: 1 }
-            }).columns.adjust().draw();
-        }, 100);
+            fixedColumns: { left: 1 },
+            autoWidth: false,
+            deferRender: true
+        });
         
         otmTable = $('#table_otm').DataTable({
             pageLength: 50,
@@ -70,8 +71,10 @@ async function loadData() {
             scrollY: 'calc(100vh - 400px)',
             scrollCollapse: true,
             fixedHeader: true,
-            fixedColumns: { left: 1 }
-        }).columns.adjust().draw();
+            fixedColumns: { left: 1 },
+            autoWidth: false,
+            deferRender: true
+        });
         
         itmTable = $('#table_itm').DataTable({
             pageLength: 50,
@@ -80,8 +83,17 @@ async function loadData() {
             scrollY: 'calc(100vh - 400px)',
             scrollCollapse: true,
             fixedHeader: true,
-            fixedColumns: { left: 1 }
+            fixedColumns: { left: 1 },
+            autoWidth: false,
+            deferRender: true
         });
+        
+        // Force initial column adjustment for all tables after initialization
+        setTimeout(() => {
+            totalTable.columns.adjust().draw();
+            otmTable.columns.adjust().draw();
+            itmTable.columns.adjust().draw();
+        }, 100);
     } catch (error) {
         document.getElementById('total-tab').innerHTML = '<div class="loading">Error loading data</div>';
         document.getElementById('otm-tab').innerHTML = '<div class="loading">Error loading data</div>';
@@ -167,19 +179,46 @@ function showTab(tab) {
     event.target.classList.add('active');
     document.getElementById(tab + '-tab').classList.add('active');
 
-
-    setTimeout(() => {
-    if (tab === 'total' && totalTable) {
-        totalTable.columns.adjust().draw();
-        totalTable.fixedHeader.adjust();
-    } else if (tab === 'otm' && otmTable) {
-        otmTable.columns.adjust().draw();
-        otmTable.fixedHeader.adjust();
-    } else if (tab === 'itm' && itmTable) {
-        itmTable.columns.adjust().draw();
-        itmTable.fixedHeader.adjust();
+    // Get current search value from any existing table
+    let globalSearch = '';
+    if (totalTable) {
+        globalSearch = totalTable.search();
+    } else if (otmTable) {
+        globalSearch = otmTable.search();
+    } else if (itmTable) {
+        globalSearch = itmTable.search();
     }
-}, 100);
+
+    // Wait for tab to be visible, then adjust and apply search
+    requestAnimationFrame(() => {
+        setTimeout(() => {
+            if (tab === 'total' && totalTable) {
+                // Apply search if exists
+                if (globalSearch) {
+                    totalTable.search(globalSearch);
+                }
+                totalTable.columns.adjust();
+                totalTable.fixedHeader.adjust();
+                totalTable.draw(false);
+            } else if (tab === 'otm' && otmTable) {
+                // Apply search from total table
+                if (globalSearch) {
+                    otmTable.search(globalSearch);
+                }
+                otmTable.columns.adjust();
+                otmTable.fixedHeader.adjust();
+                otmTable.draw(false);
+            } else if (tab === 'itm' && itmTable) {
+                // Apply search from total table
+                if (globalSearch) {
+                    itmTable.search(globalSearch);
+                }
+                itmTable.columns.adjust();
+                itmTable.fixedHeader.adjust();
+                itmTable.draw(false);
+            }
+        }, 10);
+    });
 }
 
 
@@ -225,10 +264,29 @@ async function showHistoricalChart(ticker, optionType, metric = 'money', strike 
             }
             currentChart = null;
         }
+        // Clean up previous RSI chart
+        if (window.rsiChart) {
+            window.rsiChart.remove();
+            window.rsiChart = null;
+        }
         
-        // Clear the chart container and create new canvas for TradingView
+        // Clear the chart container and create proper structure for two panels
         const chartContainer = document.querySelector('.chart-container');
-        chartContainer.innerHTML = '<div id="tradingview_chart" style="height: 100%; width: 100%; position: relative;"></div>';
+        const containerHeight = chartContainer.clientHeight;
+        const containerWidth = chartContainer.clientWidth;
+        
+        // Calculate dynamic heights
+        const mainChartHeight = Math.floor(containerHeight * 0.72);
+        const rsiChartHeight = Math.floor(containerHeight * 0.28);
+        
+        chartContainer.innerHTML = `
+            <div id="main_chart_wrapper" style="height: ${mainChartHeight}px; width: 100%; position: relative;">
+                <div id="tradingview_chart" style="height: 100%; width: 100%;"></div>
+            </div>
+            <div id="rsi_chart_wrapper" style="height: ${rsiChartHeight}px; width: 100%; position: relative; border-top: 2px solid #e1e1e1;">
+                <div id="rsi_chart" style="height: 100%; width: 100%;"></div>
+            </div>
+        `;
         
         // Prepare data for TradingView Lightweight Charts
         const dates = data.data.map(d => d.date);
@@ -236,7 +294,7 @@ async function showHistoricalChart(ticker, optionType, metric = 'money', strike 
         const pcrOI = data.data.map(d => d.pcr_oi);
         const underlyingPrice = data.data.map(d => d.underlying_price);
         
-        // ADDED: Get RSI data from backend
+        // Get RSI data from backend (calculated using pandas-ta)
         const rsiData = data.data
             .map((d, i) => ({
                 time: dates[i],
@@ -259,35 +317,111 @@ async function showHistoricalChart(ticker, optionType, metric = 'money', strike 
             thirdLineLabel = 'Moneyness Change';
         }
         
-        // Create TradingView Lightweight Chart
-        const chartElement = document.getElementById('tradingview_chart');
-        currentChart = LightweightCharts.createChart(chartElement, {
-            width: chartElement.clientWidth,
-            height: chartElement.clientHeight,
+        // Create TradingView Lightweight Chart with TWO separate panels
+        const mainChartElement = document.getElementById('tradingview_chart');
+        const rsiChartElement = document.getElementById('rsi_chart');
+        
+        // Main Chart (top panel)
+        currentChart = LightweightCharts.createChart(mainChartElement, {
+            width: mainChartElement.clientWidth,
+            height: mainChartElement.clientHeight,
             layout: {
                 background: { color: '#ffffff' },
                 textColor: '#333',
+                fontSize: 12,
             },
             grid: {
-                vertLines: { color: '#e1e1e1' },
-                horzLines: { color: '#e1e1e1' },
+                vertLines: { color: '#f0f0f0' },
+                horzLines: { color: '#f0f0f0' },
             },
             crosshair: {
                 mode: LightweightCharts.CrosshairMode.Normal,
+                vertLine: {
+                    width: 1,
+                    color: '#758696',
+                    style: 3,
+                },
+                horzLine: {
+                    width: 1,
+                    color: '#758696',
+                    style: 3,
+                },
             },
             leftPriceScale: {
                 visible: true,
-                borderColor: '#cccccc',
+                borderColor: '#d1d4dc',
             },
             rightPriceScale: {
                 visible: true,
-                borderColor: '#cccccc',
+                borderColor: '#d1d4dc',
             },
             timeScale: {
-                borderColor: '#cccccc',
+                visible: false,
+                borderColor: '#d1d4dc',
+            },
+        });
+        
+        // RSI Chart (bottom panel)
+        const rsiChart = LightweightCharts.createChart(rsiChartElement, {
+            width: rsiChartElement.clientWidth,
+            height: rsiChartElement.clientHeight,
+            layout: {
+                background: { color: '#ffffff' },
+                textColor: '#333',
+                fontSize: 12,
+            },
+            grid: {
+                vertLines: { color: '#f0f0f0' },
+                horzLines: { color: '#f0f0f0' },
+            },
+            crosshair: {
+                mode: LightweightCharts.CrosshairMode.Normal,
+                vertLine: {
+                    width: 1,
+                    color: '#758696',
+                    style: 3,
+                },
+                horzLine: {
+                    width: 1,
+                    color: '#758696',
+                    style: 3,
+                },
+            },
+            leftPriceScale: {
+                visible: true,
+                borderColor: '#d1d4dc',
+            },
+            rightPriceScale: {
+                visible: false,
+            },
+            timeScale: {
+                borderColor: '#d1d4dc',
                 timeVisible: true,
             },
         });
+        
+        // Store RSI chart for cleanup
+        window.rsiChart = rsiChart;
+        
+        // Handle window resize dynamically
+        const resizeObserver = new ResizeObserver(entries => {
+            if (currentChart && window.rsiChart) {
+                const mainEl = document.getElementById('tradingview_chart');
+                const rsiEl = document.getElementById('rsi_chart');
+                if (mainEl && rsiEl) {
+                    currentChart.applyOptions({ 
+                        width: mainEl.clientWidth,
+                        height: mainEl.clientHeight 
+                    });
+                    window.rsiChart.applyOptions({ 
+                        width: rsiEl.clientWidth,
+                        height: rsiEl.clientHeight 
+                    });
+                }
+            }
+        });
+        resizeObserver.observe(chartContainer);
+        window.chartResizeObserver = resizeObserver;
         
         // Add PCR Volume line (LEFT axis)
         const pcrVolSeries = currentChart.addLineSeries({
@@ -337,28 +471,50 @@ async function showHistoricalChart(ticker, optionType, metric = 'money', strike 
             value: thirdLineData[i]
         })));
         
-        // ADDED: RSI line with separate scale at bottom
+        // RSI line in separate panel below (calculated using pandas-ta in backend)
         let rsiSeries = null;
         if (rsiData.length > 0) {
-            rsiSeries = currentChart.addLineSeries({
-                color: '#673ab7',  // Deep purple for RSI
+            rsiSeries = rsiChart.addLineSeries({
+                color: '#673ab7',
                 lineWidth: 2,
                 title: 'RSI (14)',
-                priceScaleId: 'rsi',  // Separate RSI scale
+                priceScaleId: 'left',
             });
             rsiSeries.setData(rsiData);
             
-            // Configure RSI scale to be at bottom 30% of chart
-            currentChart.priceScale('rsi').applyOptions({
+            // Configure RSI scale range to show 0-100
+            rsiChart.priceScale('left').applyOptions({
                 scaleMargins: {
-                    top: 0.7,  // RSI at bottom 30%
-                    bottom: 0,
+                    top: 0.05,
+                    bottom: 0.05,
                 },
-                borderVisible: false,
             });
         }
         
         currentChart.timeScale().fitContent();
+        if (rsiChart) {
+            rsiChart.timeScale().fitContent();
+        }
+        
+        // Synchronize crosshairs between main chart and RSI chart
+        currentChart.subscribeCrosshairMove((param) => {
+            if (param.time && rsiChart) {
+                rsiChart.setCrosshairPosition(0, param.time, rsiSeries);
+            } else if (rsiChart) {
+                rsiChart.clearCrosshairPosition();
+            }
+        });
+        
+        if (rsiChart) {
+            rsiChart.subscribeCrosshairMove((param) => {
+                if (param.time) {
+                    currentChart.setCrosshairPosition(0, param.time, underlyingSeries);
+                } else {
+                    currentChart.clearCrosshairPosition();
+                }
+            });
+        }
+        
         isLightweightChart = true;
         
         // Create custom legend with toggles in the header
@@ -376,7 +532,7 @@ async function showHistoricalChart(ticker, optionType, metric = 'money', strike 
             { series: thirdSeries, name: thirdLineLabel, color: metric === 'vega' ? '#9c27b0' : '#4caf50' }
         ];
         
-        // ADDED: Add RSI to legend only if it was created
+        // Add RSI to legend
         if (rsiSeries) {
             seriesData.push({ series: rsiSeries, name: 'RSI (14)', color: '#673ab7' });
         }
@@ -431,12 +587,25 @@ async function showHistoricalChart(ticker, optionType, metric = 'money', strike 
 
 function closeChart() {
     document.getElementById('chartModal').style.display = 'none';
+    
+    // Clean up resize observer
+    if (window.chartResizeObserver) {
+        window.chartResizeObserver.disconnect();
+        window.chartResizeObserver = null;
+    }
+    
     if (currentChart) {
         if (isLightweightChart) {
             currentChart.remove();
         }
         currentChart = null;
         isLightweightChart = false;
+    }
+    
+    // Clean up RSI chart
+    if (window.rsiChart) {
+        window.rsiChart.remove();
+        window.rsiChart = null;
     }
 }
 
