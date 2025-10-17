@@ -477,7 +477,7 @@ async function showHistoricalChart(ticker, optionType, metric = 'money', strike 
             rsiSeries = rsiChart.addLineSeries({
                 color: '#673ab7',
                 lineWidth: 2,
-                title: 'RSI (40)',
+                title: 'RSI (14)',
                 priceScaleId: 'left',
             });
             rsiSeries.setData(rsiData);
@@ -534,7 +534,7 @@ async function showHistoricalChart(ticker, optionType, metric = 'money', strike 
         
         // Add RSI to legend
         if (rsiSeries) {
-            seriesData.push({ series: rsiSeries, name: 'RSI (40)', color: '#673ab7' });
+            seriesData.push({ series: rsiSeries, name: 'RSI (14)', color: '#673ab7' });
         }
         
         seriesData.forEach((item, index) => {
