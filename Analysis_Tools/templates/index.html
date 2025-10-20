@@ -5,7 +5,7 @@
 <title>Options Dashboard</title>
 <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
 <link rel="stylesheet" href="https://cdn.datatables.net/fixedheader/3.4.0/css/fixedHeader.dataTables.min.css">
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
 <style>
 .modal {
     display: none;
@@ -116,6 +116,6 @@ Options Dashboard v5.0 | Fast Pre-calculated Data with Column Filters
 <script>
 const availableDates = {{ dates|tojson }};
 </script>
-<script src="{{ url_for('static', filename='script.js') }}"></script>
+<script src="{{ url_for('static', filename='dashboard.js') }}"></script>
 </body>
 </html>

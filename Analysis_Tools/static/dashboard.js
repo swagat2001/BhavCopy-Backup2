@@ -133,7 +133,7 @@ function generateTableHTML(data, id) {
     
     data.forEach(row => {
         html += '<tr>';
-        html += `<td class="stock-name">${row.stock}</td>`;
+        html += `<td class="stock-name" style="cursor: pointer;" onclick="window.location.href='/stock/${row.stock}'">${row.stock}</td>`;
         html += `<td class="strike-value">${row.call_delta_pos_strike}</td>`;
         html += `<td class="percentage ${parseFloat(row.call_delta_pos_pct)>=0?'positive':'negative'}">${row.call_delta_pos_pct}%</td>`;
         html += `<td class="strike-value">${row.call_delta_neg_strike}</td>`;

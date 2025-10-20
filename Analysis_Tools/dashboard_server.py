@@ -1,5 +1,5 @@
 from flask import Flask, jsonify, request, render_template
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, inspect
 import pandas as pd
 from urllib.parse import quote_plus
 import threading
@@ -19,9 +19,11 @@ engine = create_engine(f'postgresql+psycopg2://{db_user}:{db_password_enc}@{db_h
 
 app = Flask(__name__)
 
+# CSV path for expiry dates
+CSV_PATH = "C:\\Users\\Admin\\Desktop\\BhavCopy-Backup2\\complete.csv"
+
 def get_available_dates():
     try:
-        # Check if cache table exists
         check_query = """
         SELECT EXISTS (
             SELECT FROM information_schema.tables 
@@ -55,6 +57,474 @@ def index():
     else:
         print(f"✅ Found {len(dates)} dates available")
     return render_template('index.html', dates=dates)
+
+@app.route('/stock/<ticker>')
+def stock_detail(ticker):
+    """Stock detail page"""
+    dates = get_available_dates()
+    return render_template('stock_detail.html', ticker=ticker, dates=dates)
+
+@app.route('/get_available_tickers')
+def get_available_tickers():
+    """Get list of all available tickers"""
+    try:
+        inspector = inspect(engine)
+        tables = [t for t in inspector.get_table_names() if t.startswith("TBL_") and t.endswith("_DERIVED")]
+        tickers = sorted([t.replace("TBL_", "").replace("_DERIVED", "") for t in tables])
+        return jsonify(tickers)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/get_available_trading_dates')
+def get_available_trading_dates():
+    """Get available trading dates from database"""
+    try:
+        dates = get_available_dates()
+        return jsonify({'dates': dates})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/get_expiry_dates')
+def get_expiry_dates_route():
+    """Get expiry dates for a ticker"""
+    ticker = request.args.get('ticker')
+    if not ticker:
+        return jsonify({'error': 'Ticker required'}), 400
+    
+    try:
+        expiry_dates = get_expiry_dates_for_ticker(ticker)
+        return jsonify({'expiry_dates': expiry_dates})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/get_stock_data')
+def get_stock_data():
+    """Get stock option chain data"""
+    ticker = request.args.get('ticker')
+    mode = request.args.get('mode', 'latest')
+    expiry = request.args.get('expiry')
+    date = request.args.get('date')
+    
+    try:
+        # Get expiry dates from CSV
+        expiry_dates = get_expiry_dates_for_ticker(ticker)
+        
+        # If no expiry specified, use the first one
+        if not expiry and expiry_dates:
+            expiry = expiry_dates[0]
+        
+        # Determine which date to use
+        if mode == 'latest':
+            available_dates = get_available_dates()
+            if not available_dates:
+                return jsonify({'error': 'No dates available'}), 404
+            query_date = available_dates[0]
+        else:
+            query_date = date if date else get_available_dates()[0]
+        
+        # Get data from database
+        table_name = f"TBL_{ticker}_DERIVED"
+        
+        # Check if table exists
+        inspector = inspect(engine)
+        if table_name not in inspector.get_table_names():
+            return jsonify({'error': f'Ticker {ticker} not found'}), 404
+        
+        # Get option chain data
+        query = f"""
+        SELECT 
+            "BizDt",
+            "StrkPric",
+            "OptnTp",
+            "OpnIntrst",
+            "ChngInOpnIntrst",
+            "TtlTradgVol",
+            "LastPric",
+            "UndrlygPric",
+            "ClsPric",
+            "FininstrmActlXpryDt",
+            "iv"
+        FROM "{table_name}"
+        WHERE "BizDt" = :date
+        AND "OptnTp" IN ('CE', 'PE')
+        AND "StrkPric" IS NOT NULL
+        """
+        
+        if expiry and expiry != 'all':
+            query += " AND \"FininstrmActlXpryDt\" = :expiry"
+            df = pd.read_sql(text(query), engine, params={"date": query_date, "expiry": expiry})
+        else:
+            df = pd.read_sql(text(query), engine, params={"date": query_date})
+            if not df.empty:
+                df['FininstrmActlXpryDt'] = pd.to_datetime(df['FininstrmActlXpryDt'], errors='coerce')
+                nearest_expiry = df['FininstrmActlXpryDt'].min()
+                df = df[df['FininstrmActlXpryDt'] == nearest_expiry]
+        
+        if df.empty:
+            return jsonify({'error': 'No data found for selected parameters'}), 404
+        
+        # Convert columns to numeric
+        for col in ['StrkPric', 'OpnIntrst', 'ChngInOpnIntrst', 'TtlTradgVol', 'LastPric', 'UndrlygPric', 'ClsPric', 'iv']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # Build option chain
+        option_chain = build_option_chain(df)
+        
+        # Calculate stats
+        stats = calculate_stats(df)
+        
+        # Get price data with all indicators for chart
+        price_data = get_price_data_with_indicators(ticker, query_date, df)
+        
+        # Debug: Check what we got
+        print(f"📊 Returning data for {ticker}: {len(option_chain)} strikes, {len(price_data)} price points")
+        
+        return jsonify({
+            'ticker': ticker,
+            'expiry_dates': expiry_dates,
+            'selected_expiry': expiry,
+            'last_updated': query_date,
+            'stats': stats,
+            'option_chain': option_chain,
+            'price_data': price_data if price_data else []
+        })
+        
+    except Exception as e:
+        print(f"Error in get_stock_data: {e}")
+        return jsonify({'error': str(e)}), 500
+
+def get_expiry_dates_for_ticker(ticker):
+    """Get expiry dates from CSV or database for a specific ticker"""
+    try:
+        # First try CSV
+        df = pd.read_csv(CSV_PATH)
+        ticker_df = df[df['name'] == ticker].copy()
+        
+        if not ticker_df.empty:
+            ticker_df['expiry'] = pd.to_datetime(ticker_df['expiry'], errors='coerce')
+            ticker_df = ticker_df.dropna(subset=['expiry'])
+            expiry_dates = sorted(ticker_df['expiry'].dt.strftime('%Y-%m-%d').unique())
+            if expiry_dates:
+                return expiry_dates
+        
+        # If CSV doesn't have data, get from database
+        table_name = f"TBL_{ticker}_DERIVED"
+        inspector = inspect(engine)
+        if table_name in inspector.get_table_names():
+            query = f"""
+            SELECT DISTINCT "FininstrmActlXpryDt"
+            FROM "{table_name}"
+            WHERE "FininstrmActlXpryDt" IS NOT NULL
+            ORDER BY "FininstrmActlXpryDt"
+            """
+            result = pd.read_sql(text(query), engine)
+            if not result.empty:
+                result['FininstrmActlXpryDt'] = pd.to_datetime(result['FininstrmActlXpryDt'], errors='coerce')
+                expiry_dates = [d.strftime('%Y-%m-%d') for d in result['FininstrmActlXpryDt'] if pd.notna(d)]
+                return expiry_dates
+        
+        return []
+    except Exception as e:
+        print(f"Error getting expiry dates: {e}")
+        return []
+
+def build_option_chain(df):
+    """Build option chain from dataframe"""
+    strikes = sorted(df['StrkPric'].unique())
+    option_chain = []
+    
+    for strike in strikes:
+        ce_data = df[(df['StrkPric'] == strike) & (df['OptnTp'] == 'CE')]
+        pe_data = df[(df['StrkPric'] == strike) & (df['OptnTp'] == 'PE')]
+        
+        row = {
+            'strike': float(strike),
+            'call_oi': float(ce_data['OpnIntrst'].iloc[0]) if not ce_data.empty else 0,
+            'call_oi_chg': float(ce_data['ChngInOpnIntrst'].iloc[0]) if not ce_data.empty else 0,
+            'call_volume': float(ce_data['TtlTradgVol'].iloc[0]) if not ce_data.empty else 0,
+            'call_price': float(ce_data['LastPric'].iloc[0]) if not ce_data.empty else 0,
+            'put_price': float(pe_data['LastPric'].iloc[0]) if not pe_data.empty else 0,
+            'put_volume': float(pe_data['TtlTradgVol'].iloc[0]) if not pe_data.empty else 0,
+            'put_oi_chg': float(pe_data['ChngInOpnIntrst'].iloc[0]) if not pe_data.empty else 0,
+            'put_oi': float(pe_data['OpnIntrst'].iloc[0]) if not pe_data.empty else 0,
+        }
+        option_chain.append(row)
+    
+    return option_chain
+
+def calculate_stats(df):
+    """Calculate summary statistics"""
+    ce_df = df[df['OptnTp'] == 'CE']
+    pe_df = df[df['OptnTp'] == 'PE']
+    
+    total_ce_oi = float(ce_df['OpnIntrst'].sum())
+    total_pe_oi = float(pe_df['OpnIntrst'].sum())
+    total_ce_oi_chg = float(ce_df['ChngInOpnIntrst'].sum())
+    total_pe_oi_chg = float(pe_df['ChngInOpnIntrst'].sum())
+    pcr_oi = total_pe_oi / total_ce_oi if total_ce_oi > 0 else 0
+    
+    return {
+        'total_ce_oi': total_ce_oi,
+        'total_pe_oi': total_pe_oi,
+        'total_ce_oi_chg': total_ce_oi_chg,
+        'total_pe_oi_chg': total_pe_oi_chg,
+        'pcr_oi': pcr_oi
+    }
+
+def get_yahoo_ticker_mapping():
+    """Get all available tickers from database and create Yahoo Finance mapping"""
+    try:
+        inspector = inspect(engine)
+        tables = [t for t in inspector.get_table_names() if t.startswith("TBL_") and t.endswith("_DERIVED")]
+        tickers = [t.replace("TBL_", "").replace("_DERIVED", "") for t in tables]
+        
+        # Create mapping for all tickers
+        mapping = {
+            'NIFTY': '^NSEI',
+            'BANKNIFTY': '^NSEBANK',
+            'FINNIFTY': 'NIFTY_FIN_SERVICE.NS',
+            'MIDCPNIFTY': '^NSEMDCP50',
+        }
+        
+        # Add all other tickers with .NS suffix
+        for ticker in tickers:
+            if ticker not in mapping:
+                mapping[ticker] = f"{ticker}.NS"
+        
+        print(f"✅ Created Yahoo Finance mapping for {len(mapping)} tickers")
+        return mapping
+    except Exception as e:
+        print(f"Error creating ticker mapping: {e}")
+        return {}
+
+# Load ticker mapping once at startup
+YAHOO_TICKER_MAP = get_yahoo_ticker_mapping()
+
+def get_price_data_with_indicators(ticker, end_date, options_df):
+    """Get intraday price data with OI, IV, PCR indicators"""
+    try:
+        import yfinance as yf
+        from datetime import datetime, timedelta
+        
+        # Use the global mapping
+        yahoo_symbol = YAHOO_TICKER_MAP.get(ticker, f"{ticker}.NS")
+        
+        print(f"📊 Fetching {ticker} as {yahoo_symbol}...")
+        
+        if isinstance(end_date, str):
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+        else:
+            end_dt = end_date
+        
+        start_dt = end_dt
+        end_dt_plus = end_dt + timedelta(days=1)
+        
+        stock = yf.Ticker(yahoo_symbol)
+        price_df = stock.history(start=start_dt, end=end_dt_plus, interval='5m')
+        
+        # If no data with .NS, try .BO (BSE)
+        if price_df.empty and yahoo_symbol.endswith('.NS'):
+            yahoo_symbol_bse = yahoo_symbol.replace('.NS', '.BO')
+            print(f"⚠️ No data for {yahoo_symbol}, trying {yahoo_symbol_bse}...")
+            stock = yf.Ticker(yahoo_symbol_bse)
+            price_df = stock.history(start=start_dt, end=end_dt_plus, interval='5m')
+        
+        if price_df.empty:
+            print(f"⚠️ No yfinance data for {ticker}, using fallback")
+            return get_fallback_chart_data(ticker, end_date, options_df)
+        
+        print(f"✅ Got {len(price_df)} price data points")
+        
+        # Calculate indicators from options data
+        ce_df = options_df[options_df['OptnTp'] == 'CE']
+        pe_df = options_df[options_df['OptnTp'] == 'PE']
+        
+        total_ce_oi = float(ce_df['OpnIntrst'].sum()) if not ce_df.empty else 0
+        total_pe_oi = float(pe_df['OpnIntrst'].sum()) if not pe_df.empty else 0
+        total_ce_vol = float(ce_df['TtlTradgVol'].sum()) if not ce_df.empty else 0
+        total_pe_vol = float(pe_df['TtlTradgVol'].sum()) if not pe_df.empty else 0
+        
+        pcr_oi = total_pe_oi / total_ce_oi if total_ce_oi > 0 else 1.0
+        pcr_vol = total_pe_vol / total_ce_vol if total_ce_vol > 0 else 1.0
+        
+        # Average IV from all options
+        avg_iv = float(options_df['iv'].mean()) if 'iv' in options_df.columns else 0
+        
+        chart_data = []
+        
+        for timestamp, row in price_df.iterrows():
+            unix_timestamp = int(timestamp.timestamp())
+            
+            chart_data.append({
+                'time': unix_timestamp,
+                'open': float(row['Open']),
+                'high': float(row['High']),
+                'low': float(row['Low']),
+                'close': float(row['Close']),
+                'volume': float(row['Volume']),
+                'vwap': float((row['High'] + row['Low'] + row['Close']) / 3),
+                'oi': total_ce_oi + total_pe_oi,  # Total OI
+                'iv': avg_iv,  # Average IV
+                'pcr': pcr_oi  # PCR based on OI
+            })
+        
+        return chart_data
+        
+    except Exception as e:
+        print(f"⚠️ Error getting chart data: {e}")
+        return get_fallback_chart_data(ticker, end_date, options_df)
+
+def get_fallback_chart_data(ticker, end_date, options_df):
+    """Fallback chart data from database"""
+    try:
+        from datetime import datetime
+        
+        ce_df = options_df[options_df['OptnTp'] == 'CE']
+        pe_df = options_df[options_df['OptnTp'] == 'PE']
+        
+        total_ce_oi = float(ce_df['OpnIntrst'].sum()) if not ce_df.empty else 0
+        total_pe_oi = float(pe_df['OpnIntrst'].sum()) if not pe_df.empty else 0
+        total_vol = float(options_df['TtlTradgVol'].sum())
+        
+        pcr_oi = total_pe_oi / total_ce_oi if total_ce_oi > 0 else 1.0
+        avg_iv = float(options_df['iv'].mean()) if 'iv' in options_df.columns else 0
+        
+        price = float(options_df['UndrlygPric'].iloc[0])
+        
+        if isinstance(end_date, str):
+            date_obj = datetime.strptime(end_date, '%Y-%m-%d')
+        else:
+            date_obj = end_date
+        
+        date_obj = date_obj.replace(hour=15, minute=30, second=0)
+        unix_timestamp = int(date_obj.timestamp())
+        
+        return [{
+            'time': unix_timestamp,
+            'open': price,
+            'high': price,
+            'low': price,
+            'close': price,
+            'volume': total_vol,
+            'vwap': price,
+            'oi': total_ce_oi + total_pe_oi,
+            'iv': avg_iv,
+            'pcr': pcr_oi
+        }]
+    except Exception as e:
+        print(f"Error in fallback chart data: {e}")
+        return []
+    """Get historical intraday price data using yfinance"""
+    try:
+        import yfinance as yf
+        from datetime import datetime, timedelta
+        
+        # Map ticker to Yahoo Finance symbol
+        yahoo_ticker_map = {
+            'NIFTY': '^NSEI',
+            'BANKNIFTY': '^NSEBANK',
+            'FINNIFTY': 'NIFTY_FIN_SERVICE.NS'
+        }
+        
+        yahoo_symbol = yahoo_ticker_map.get(ticker, f"{ticker}.NS")
+        
+        # Parse the end_date
+        if isinstance(end_date, str):
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+        else:
+            end_dt = end_date
+        
+        # For dates in the past, get intraday data
+        start_dt = end_dt
+        end_dt_plus = end_dt + timedelta(days=1)
+        
+        print(f"Fetching yfinance data for {yahoo_symbol} on {end_date}...")
+        
+        # Download intraday data
+        stock = yf.Ticker(yahoo_symbol)
+        df = stock.history(start=start_dt, end=end_dt_plus, interval='5m')
+        
+        if df.empty:
+            print(f"⚠️ No yfinance data for {yahoo_symbol} on {end_date}. Using fallback.")
+            return get_price_data_from_db(ticker, end_date)
+        
+        print(f"✅ Got {len(df)} data points from yfinance")
+        
+        # Prepare data for chart
+        price_data = []
+        
+        for timestamp, row in df.iterrows():
+            # Convert timestamp to Unix timestamp (seconds since epoch)
+            unix_timestamp = int(timestamp.timestamp())
+            
+            price_data.append({
+                'time': unix_timestamp,
+                'open': float(row['Open']),
+                'high': float(row['High']),
+                'low': float(row['Low']),
+                'close': float(row['Close']),
+                'volume': float(row['Volume'])
+            })
+        
+        return price_data
+        
+    except ImportError:
+        print("⚠️ yfinance not installed. Install with: pip install yfinance")
+        print("   Falling back to database data...")
+        return get_price_data_from_db(ticker, end_date)
+    except Exception as e:
+        print(f"⚠️ Error getting yfinance data: {e}")
+        print("   Falling back to database data...")
+        return get_price_data_from_db(ticker, end_date)
+
+def get_price_data_from_db(ticker, end_date):
+    """Fallback: Get price data from database"""
+    try:
+        from datetime import datetime
+        
+        table_name = f"TBL_{ticker}_DERIVED"
+        
+        query = f"""
+        SELECT 
+            "BizDt",
+            "UndrlygPric"
+        FROM "{table_name}"
+        WHERE "BizDt" = :end_date
+        LIMIT 1
+        """
+        
+        df = pd.read_sql(text(query), engine, params={"end_date": end_date})
+        
+        if df.empty:
+            return []
+        
+        df['UndrlygPric'] = pd.to_numeric(df['UndrlygPric'], errors='coerce')
+        
+        price = float(df['UndrlygPric'].iloc[0])
+        
+        # Parse date and create timestamp for 3:30 PM
+        if isinstance(end_date, str):
+            date_obj = datetime.strptime(end_date, '%Y-%m-%d')
+        else:
+            date_obj = end_date
+        
+        # Set time to 15:30 (market close)
+        date_obj = date_obj.replace(hour=15, minute=30, second=0)
+        unix_timestamp = int(date_obj.timestamp())
+        
+        # Return single data point as OHLC
+        return [{
+            'time': unix_timestamp,
+            'open': price,
+            'high': price,
+            'low': price,
+            'close': price,
+            'volume': 0
+        }]
+    except Exception as e:
+        print(f"Error getting DB price data: {e}")
+        return []
 
 @app.route('/get_historical_data')
 def get_historical_data():
@@ -98,7 +568,6 @@ def get_historical_data():
                         prefix = option_type
                         table_name = f"TBL_{ticker}_DERIVED"
                         
-                        # FIX: Get strike-specific vega instead of average
                         if metric == 'vega' and strike and strike != 'N/A':
                             query_sql = f"""
                             SELECT 
@@ -143,7 +612,7 @@ def get_historical_data():
                                 'pcr_volume': round(pcr_volume, 4),
                                 'pcr_oi': round(pcr_oi, 4),
                                 'underlying_price': round(underlying_price, 2),
-                                'rsi': ticker_data.get('rsi', None)  # Get RSI from cached data
+                                'rsi': ticker_data.get('rsi', None)
                             }
                             
                             if metric == 'money':
@@ -251,8 +720,4 @@ if __name__ == '__main__':
     
     threading.Thread(target=open_browser, daemon=True).start()
     
-    # For HTTPS, uncomment these lines and generate SSL certificate:
-    # app.run(debug=False, host='0.0.0.0', port=5000, ssl_context='adhoc')
-    
-    # For HTTP (default):
     app.run(debug=False, host='0.0.0.0', port=5000)

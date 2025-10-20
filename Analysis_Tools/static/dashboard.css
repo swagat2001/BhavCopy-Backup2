@@ -217,6 +217,13 @@ table.dataTable tbody td {
     text-align: left !important;
     padding-left: 20px !important;
     background: #2c3e50;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.stock-name:hover {
+    background: #34495e;
+    text-decoration: underline;
 }
 
 table.dataTable tbody tr:nth-child(even) .stock-name {
