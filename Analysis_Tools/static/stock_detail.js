@@ -37,11 +37,17 @@ function setDefaultDate(defaultDate = null) {
     
     if (defaultDate) {
         dateInput.value = defaultDate;
+        dateInput.max = today;
+        
+        // Set min date to oldest available date if we have trading dates
+        if (availableTradingDates.length > 0) {
+            const oldestDate = availableTradingDates[availableTradingDates.length - 1];
+            dateInput.min = oldestDate;
+        }
     } else {
         dateInput.value = today;
+        dateInput.max = today;
     }
-    
-    dateInput.max = today;
 }
 
 async function loadExpiryDates() {
@@ -148,7 +154,14 @@ async function loadStockData() {
         console.log('Received data:', data);
         
         if (data.error) {
-            alert(`Error: ${data.error}`);
+            let errorMsg = `Error: ${data.error}\n\n`;
+            if (availableTradingDates.length > 0) {
+                errorMsg += `Available dates:\n`;
+                errorMsg += `Latest: ${availableTradingDates[0]}\n`;
+                errorMsg += `Oldest: ${availableTradingDates[availableTradingDates.length - 1]}\n`;
+                errorMsg += `Total: ${availableTradingDates.length} dates available`;
+            }
+            alert(errorMsg);
             return;
         }
         
@@ -172,20 +185,71 @@ function updateExpiryTable(expiryDates, currentDate) {
         return;
     }
     
-    // Show expiry dates - actual data will come from backend enhancement
-    let html = '';
-    expiryDates.forEach(expiry => {
-        html += `<tr>
-            <td>${expiry}</td>
-            <td>-</td>
-            <td class="positive-change">-</td>
-            <td>-</td>
-            <td>-</td>
-            <td class="positive-change">-</td>
-        </tr>`;
-    });
-    
-    tbody.innerHTML = html;
+    // Fetch detailed expiry data from backend
+    fetch(`/get_expiry_data_detailed?ticker=${ticker}&date=${currentDate}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                console.error('Error fetching expiry data:', data.error);
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 20px; color: #999;">Error loading expiry data</td></tr>';
+                return;
+            }
+            
+            // Update Fair Price and Lot Size
+            let fairPriceText = data.fair_price || '-';
+            if (data.expiry_data && data.expiry_data.length > 0 && data.expiry_data[0].expiry) {
+                // Format first expiry as DDMMMYY
+                const date = new Date(data.expiry_data[0].expiry);
+                const day = String(date.getDate()).padStart(2, '0');
+                const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+                const month = monthNames[date.getMonth()];
+                const year = String(date.getFullYear()).slice(-2);
+                const formattedExpiry = `${day}${month}${year}`;
+                fairPriceText = `(${formattedExpiry}) : ${data.fair_price.toFixed(2)}`;
+            }
+            document.getElementById('fairPrice').textContent = fairPriceText;
+            document.getElementById('lotSize').textContent = data.lot_size || '-';
+            
+            // Build table rows
+            let html = '';
+            data.expiry_data.forEach((expiry, index) => {
+                // Format expiry date as DDMMMYY (e.g., 28OCT25)
+                let formattedExpiry = '-';
+                if (expiry.expiry) {
+                    const date = new Date(expiry.expiry);
+                    const day = String(date.getDate()).padStart(2, '0');
+                    const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+                    const month = monthNames[date.getMonth()];
+                    const year = String(date.getFullYear()).slice(-2);
+                    formattedExpiry = `${day}${month}${year}`;
+                }
+                
+                // Calculate price change percentage (placeholder - needs previous day data)
+                const priceChgPercent = 0; // TODO: Calculate from previous day
+                const priceChgClass = priceChgPercent >= 0 ? 'positive-change' : 'negative-change';
+                const priceChgSymbol = priceChgPercent >= 0 ? '↑' : '↓';
+                
+                // Calculate OI change percentage
+                const oiChgPercent = expiry.oi > 0 ? ((expiry.oi_chg / expiry.oi) * 100) : 0;
+                const oiChgClass = oiChgPercent >= 0 ? 'positive-change' : 'negative-change';
+                const oiChgSymbol = oiChgPercent >= 0 ? '↑' : '↓';
+                
+                html += `<tr>`;
+                html += `<td>${formattedExpiry}</td>`;
+                html += `<td>${expiry.price.toFixed(2)}</td>`;
+                html += `<td class="${priceChgClass}">${priceChgSymbol} ${Math.abs(priceChgPercent).toFixed(2)}%</td>`;
+                html += `<td>${formatNumber(expiry.volume)}</td>`;
+                html += `<td>${formatNumber(expiry.oi)}</td>`;
+                html += `<td class="${oiChgClass}">${oiChgSymbol} ${Math.abs(oiChgPercent).toFixed(2)}%</td>`;
+                html += `</tr>`;
+            });
+            
+            tbody.innerHTML = html;
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 20px; color: #999;">Error loading data</td></tr>';
+        });
 }
 
 function updateGauges(stats, optionChain) {

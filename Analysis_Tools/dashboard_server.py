@@ -97,6 +97,81 @@ def get_expiry_dates_route():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/get_expiry_data_detailed')
+def get_expiry_data_detailed():
+    """Get detailed data for each expiry date"""
+    ticker = request.args.get('ticker')
+    date = request.args.get('date')
+    
+    if not ticker or not date:
+        return jsonify({'error': 'Ticker and date required'}), 400
+    
+    try:
+        table_name = f"TBL_{ticker}_DERIVED"
+        
+        # Check if table exists
+        inspector = inspect(engine)
+        if table_name not in inspector.get_table_names():
+            return jsonify({'error': f'Ticker {ticker} not found'}), 404
+        
+        # Get unique expiry dates with aggregated data
+        query = f"""
+        SELECT 
+            "FininstrmActlXpryDt" as expiry,
+            MAX("UndrlygPric") as price,
+            SUM("TtlTradgVol") as volume,
+            SUM("OpnIntrst") as oi,
+            SUM("ChngInOpnIntrst") as oi_chg
+        FROM "{table_name}"
+        WHERE "BizDt" = :date
+        AND "FininstrmActlXpryDt" IS NOT NULL
+        GROUP BY "FininstrmActlXpryDt"
+        ORDER BY "FininstrmActlXpryDt"
+        """
+        
+        df = pd.read_sql(text(query), engine, params={"date": date})
+        
+        if df.empty:
+            return jsonify({'expiry_data': [], 'lot_size': 0, 'fair_price': 0})
+        
+        # Convert to numeric
+        for col in ['price', 'volume', 'oi', 'oi_chg']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # Get lot size from complete.csv
+        try:
+            csv_df = pd.read_csv(CSV_PATH)
+            ticker_csv = csv_df[csv_df['name'] == ticker]
+            lot_size = int(ticker_csv['lot_size'].iloc[0]) if not ticker_csv.empty else 0
+        except:
+            lot_size = 0
+        
+        # Calculate fair price (ATM price from nearest expiry)
+        fair_price = float(df['price'].iloc[0]) if not df.empty else 0
+        
+        # Build result
+        result = []
+        for _, row in df.iterrows():
+            expiry_date = row['expiry'].strftime('%Y-%m-%d') if pd.notna(row['expiry']) else None
+            result.append({
+                'expiry': expiry_date,
+                'price': float(row['price']) if pd.notna(row['price']) else 0,
+                'volume': float(row['volume']) if pd.notna(row['volume']) else 0,
+                'oi': float(row['oi']) if pd.notna(row['oi']) else 0,
+                'oi_chg': float(row['oi_chg']) if pd.notna(row['oi_chg']) else 0
+            })
+        
+        return jsonify({
+            'expiry_data': result,
+            'lot_size': lot_size,
+            'fair_price': round(fair_price, 2)
+        })
+    
+    except Exception as e:
+        print(f"Error in get_expiry_data_detailed: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/get_stock_data')
 def get_stock_data():
     """Get stock option chain data"""
