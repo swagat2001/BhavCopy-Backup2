@@ -20,15 +20,16 @@ body {
 }
 
 .header {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(135deg, #ffffff 0%, #ffffff 100%);
     color: white;
-    padding: 30px;
+    padding: 5px;
     text-align: center;
 }
 
 .header h1 {
     font-size: 32px;
     margin-bottom: 10px;
+    color: #333333;
 }
 
 .header .date {
@@ -55,7 +56,7 @@ body {
 
 .date-selector select {
     padding: 10px 15px;
-    border: 2px solid #667eea;
+    border: 2px solid #7c1e1d;
     border-radius: 8px;
     font-size: 14px;
     font-weight: 600;
@@ -66,7 +67,7 @@ body {
 
 .date-selector button {
     padding: 10px 20px;
-    background: #667eea;
+    background: #7c1e1d;
     color: white;
     border: none;
     border-radius: 8px;
@@ -76,7 +77,8 @@ body {
 }
 
 .date-selector button:hover {
-    background: #5568d3;
+    background: #000;
+    color: white;
 }
 
 .tabs {
@@ -97,17 +99,18 @@ body {
 }
 
 .tab:hover {
-    background: #dee2e6;
+    background: #000;
+    color: white;
 }
 
 .tab.active {
-    background: #667eea;
+    background: #7c1e1d;
     color: white;
 }
 
 .export-btn {
     padding: 12px 25px;
-    background: #27ae60;
+    background: #7c1e1d;
     color: white;
     border: none;
     border-radius: 8px;
@@ -117,7 +120,8 @@ body {
 }
 
 .export-btn:hover {
-    background: #229954;
+    background: #000;
+    color: white;
 }
 
 .loading {

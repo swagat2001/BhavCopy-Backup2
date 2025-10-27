@@ -86,16 +86,56 @@ def get_available_trading_dates():
 
 @app.route('/get_expiry_dates')
 def get_expiry_dates_route():
-    """Get expiry dates for a ticker"""
+    """Get expiry dates for a ticker, optionally filtered by date"""
     ticker = request.args.get('ticker')
+    date = request.args.get('date')  # Optional date filter
+    
     if not ticker:
         return jsonify({'error': 'Ticker required'}), 400
     
     try:
-        expiry_dates = get_expiry_dates_for_ticker(ticker)
+        if date:
+            # Get expiry dates that have data for the specific date
+            expiry_dates = get_expiry_dates_for_ticker_and_date(ticker, date)
+        else:
+            # Get all expiry dates for the ticker
+            expiry_dates = get_expiry_dates_for_ticker(ticker)
         return jsonify({'expiry_dates': expiry_dates})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+def get_expiry_dates_for_ticker_and_date(ticker, date):
+    """Get expiry dates that have data for a specific ticker and date"""
+    try:
+        table_name = f"TBL_{ticker}_DERIVED"
+        inspector = inspect(engine)
+        
+        if table_name not in inspector.get_table_names():
+            print(f"❌ {ticker}: Table {table_name} does not exist")
+            return []
+        
+        # Query to get only expiry dates that have data for the specified date
+        query = f"""
+        SELECT DISTINCT "FininstrmActlXpryDt"
+        FROM "{table_name}"
+        WHERE "BizDt" = :date
+        AND "FininstrmActlXpryDt" IS NOT NULL
+        ORDER BY "FininstrmActlXpryDt"
+        """
+        result = pd.read_sql(text(query), engine, params={"date": date})
+        
+        if not result.empty:
+            result['FininstrmActlXpryDt'] = pd.to_datetime(result['FininstrmActlXpryDt'], errors='coerce')
+            expiry_dates = [d.strftime('%Y-%m-%d') for d in result['FininstrmActlXpryDt'] if pd.notna(d)]
+            print(f"📅 {ticker} on {date}: Found {len(expiry_dates)} expiry dates with data: {expiry_dates}")
+            return expiry_dates
+        else:
+            print(f"⚠️ {ticker} on {date}: No expiry dates found with data")
+            return []
+            
+    except Exception as e:
+        print(f"❌ Error getting expiry dates for {ticker} on {date}: {e}")
+        return []
 
 @app.route('/get_expiry_data_detailed')
 def get_expiry_data_detailed():
@@ -114,19 +154,49 @@ def get_expiry_data_detailed():
         if table_name not in inspector.get_table_names():
             return jsonify({'error': f'Ticker {ticker} not found'}), 404
         
-        # Get unique expiry dates with aggregated data
-        query = f"""
-        SELECT 
-            "FininstrmActlXpryDt" as expiry,
-            MAX("UndrlygPric") as price,
-            SUM("TtlTradgVol") as volume,
-            SUM("OpnIntrst") as oi,
-            SUM("ChngInOpnIntrst") as oi_chg
+        # Get previous trading date
+        prev_date_query = f"""
+        SELECT MAX("BizDt") as prev_date
         FROM "{table_name}"
-        WHERE "BizDt" = :date
-        AND "FininstrmActlXpryDt" IS NOT NULL
-        GROUP BY "FininstrmActlXpryDt"
-        ORDER BY "FininstrmActlXpryDt"
+        WHERE "BizDt" < :date
+        """
+        prev_result = pd.read_sql(text(prev_date_query), engine, params={"date": date})
+        prev_date = prev_result.iloc[0]['prev_date'] if not prev_result.empty and pd.notna(prev_result.iloc[0]['prev_date']) else None
+        
+        # Get current day data
+        # Price, OI, OI_chg from futures (null OptnTp)
+        # Volume from options (CE + PE)
+        query = f"""
+        WITH futures_data AS (
+            SELECT 
+                "FininstrmActlXpryDt" as expiry,
+                "ClsPric" as price,
+                "OpnIntrst" as oi,
+                "ChngInOpnIntrst" as oi_chg
+            FROM "{table_name}"
+            WHERE "BizDt" = :date
+            AND "FininstrmActlXpryDt" IS NOT NULL
+            AND "OptnTp" IS NULL
+        ),
+        options_volume AS (
+            SELECT 
+                "FininstrmActlXpryDt" as expiry,
+                SUM("TtlTradgVol") as volume
+            FROM "{table_name}"
+            WHERE "BizDt" = :date
+            AND "FininstrmActlXpryDt" IS NOT NULL
+            AND "OptnTp" IN ('CE', 'PE')
+            GROUP BY "FininstrmActlXpryDt"
+        )
+        SELECT 
+            f.expiry,
+            f.price,
+            COALESCE(v.volume, 0) as volume,
+            f.oi,
+            f.oi_chg
+        FROM futures_data f
+        LEFT JOIN options_volume v ON f.expiry = v.expiry
+        ORDER BY f.expiry
         """
         
         df = pd.read_sql(text(query), engine, params={"date": date})
@@ -139,27 +209,148 @@ def get_expiry_data_detailed():
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        # Get lot size from complete.csv
-        try:
-            csv_df = pd.read_csv(CSV_PATH)
-            ticker_csv = csv_df[csv_df['name'] == ticker]
-            lot_size = int(ticker_csv['lot_size'].iloc[0]) if not ticker_csv.empty else 0
-        except:
-            lot_size = 0
+        # Get previous day prices if available
+        prev_prices = {}
+        if prev_date:
+            prev_query = f"""
+            SELECT 
+                "FininstrmActlXpryDt" as expiry,
+                "ClsPric" as prev_price
+            FROM "{table_name}"
+            WHERE "BizDt" = :prev_date
+            AND "FininstrmActlXpryDt" IS NOT NULL
+            AND "OptnTp" IS NULL
+            """
+            prev_df = pd.read_sql(text(prev_query), engine, params={"prev_date": prev_date})
+            if not prev_df.empty:
+                prev_df['prev_price'] = pd.to_numeric(prev_df['prev_price'], errors='coerce')
+                for _, row in prev_df.iterrows():
+                    if pd.notna(row['expiry']):
+                        prev_prices[row['expiry']] = float(row['prev_price'])
+                print(f"Found {len(prev_prices)} previous prices for {ticker} on {prev_date}")
+            else:
+                print(f"No previous day data found for {ticker} on {prev_date}")
+        else:
+            print(f"No previous trading date found before {date} for {ticker}")
         
-        # Calculate fair price (ATM price from nearest expiry)
-        fair_price = float(df['price'].iloc[0]) if not df.empty else 0
+        # Get lot size - first try from database NewBrdLotQty, then fall back to CSV
+        lot_size = 0
+        try:
+            if not df.empty:
+                # Try to get from first row of database
+                lot_query = f"""
+                SELECT "NewBrdLotQty"
+                FROM "{table_name}"
+                WHERE "BizDt" = :date
+                LIMIT 1
+                """
+                lot_df = pd.read_sql(text(lot_query), engine, params={"date": date})
+                if not lot_df.empty and pd.notna(lot_df['NewBrdLotQty'].iloc[0]):
+                    lot_size = int(lot_df['NewBrdLotQty'].iloc[0])
+        except:
+            pass
+        
+        # Fallback to CSV if not in database
+        if lot_size == 0:
+            try:
+                csv_df = pd.read_csv(CSV_PATH)
+                ticker_csv = csv_df[csv_df['name'] == ticker]
+                lot_size = int(ticker_csv['lot_size'].iloc[0]) if not ticker_csv.empty else 0
+            except:
+                lot_size = 0
+        
+        # Calculate fair price - get underlying price and find nearest strike
+        fair_price = 0
+        try:
+            # Get current underlying price
+            underlying_query = f"""
+            SELECT AVG("UndrlygPric") as underlying_price
+            FROM "{table_name}"
+            WHERE "BizDt" = :date
+            LIMIT 1
+            """
+            underlying_df = pd.read_sql(text(underlying_query), engine, params={"date": date})
+            if not underlying_df.empty and pd.notna(underlying_df['underlying_price'].iloc[0]):
+                underlying_price = float(underlying_df['underlying_price'].iloc[0])
+                
+                # Get nearest strike price for first expiry
+                first_expiry = df['expiry'].iloc[0] if not df.empty else None
+                if first_expiry:
+                    strike_query = f"""
+                    SELECT "StrkPric", ABS("StrkPric" - :underlying) as distance
+                    FROM "{table_name}"
+                    WHERE "BizDt" = :date
+                    AND "FininstrmActlXpryDt" = :expiry
+                    AND "OptnTp" = 'CE'
+                    ORDER BY distance
+                    LIMIT 1
+                    """
+                    strike_df = pd.read_sql(text(strike_query), engine, params={
+                        "date": date, 
+                        "expiry": first_expiry,
+                        "underlying": underlying_price
+                    })
+                    if not strike_df.empty:
+                        fair_price = float(strike_df['StrkPric'].iloc[0])
+        except Exception as e:
+            print(f"Error calculating fair price: {e}")
+            fair_price = float(df['price'].iloc[0]) if not df.empty else 0
+        
+        # Get previous day OI for percentage calculation
+        prev_oi_dict = {}
+        if prev_date:
+            prev_oi_query = f"""
+            SELECT 
+                "FininstrmActlXpryDt" as expiry,
+                "OpnIntrst" as prev_oi
+            FROM "{table_name}"
+            WHERE "BizDt" = :prev_date
+            AND "FininstrmActlXpryDt" IS NOT NULL
+            AND "OptnTp" IS NULL
+            """
+            prev_oi_df = pd.read_sql(text(prev_oi_query), engine, params={"prev_date": prev_date})
+            if not prev_oi_df.empty:
+                prev_oi_df['prev_oi'] = pd.to_numeric(prev_oi_df['prev_oi'], errors='coerce')
+                for _, oi_row in prev_oi_df.iterrows():
+                    if pd.notna(oi_row['expiry']):
+                        prev_oi_dict[oi_row['expiry']] = float(oi_row['prev_oi'])
         
         # Build result
         result = []
         for _, row in df.iterrows():
-            expiry_date = row['expiry'].strftime('%Y-%m-%d') if pd.notna(row['expiry']) else None
+            expiry_date = row['expiry']
+            current_price = float(row['price']) if pd.notna(row['price']) else 0
+            current_oi = float(row['oi']) if pd.notna(row['oi']) else 0
+            oi_chg = float(row['oi_chg']) if pd.notna(row['oi_chg']) else 0
+            
+            # Calculate price change percentage
+            prev_price = prev_prices.get(expiry_date, None)
+            price_chg_percent = 0
+            if prev_price and prev_price > 0 and current_price > 0:
+                price_chg_percent = ((current_price - prev_price) / prev_price) * 100
+                print(f"Expiry {expiry_date}: Current={current_price}, Prev={prev_price}, Change={price_chg_percent:.2f}%")
+            else:
+                print(f"Expiry {expiry_date}: Cannot calculate price change (Current={current_price}, Prev={prev_price})")
+            
+            # Calculate OI change percentage: (today_oi - prev_oi) / prev_oi * 100
+            prev_oi = prev_oi_dict.get(expiry_date, None)
+            oi_chg_percent = 0
+            if prev_oi and prev_oi > 0:
+                oi_chg_percent = ((current_oi - prev_oi) / prev_oi) * 100
+                print(f"Expiry {expiry_date}: Current OI={current_oi}, Prev OI={prev_oi}, OI Change%={oi_chg_percent:.2f}%")
+            else:
+                # Fallback: if no prev_oi, calculate from oi_chg
+                if current_oi > 0:
+                    oi_chg_percent = (oi_chg / current_oi) * 100
+            
             result.append({
-                'expiry': expiry_date,
-                'price': float(row['price']) if pd.notna(row['price']) else 0,
+                'expiry': expiry_date.strftime('%Y-%m-%d') if pd.notna(expiry_date) else None,
+                'price': current_price,
+                'price_chg_percent': round(price_chg_percent, 2),
                 'volume': float(row['volume']) if pd.notna(row['volume']) else 0,
-                'oi': float(row['oi']) if pd.notna(row['oi']) else 0,
-                'oi_chg': float(row['oi_chg']) if pd.notna(row['oi_chg']) else 0
+                'oi': current_oi,
+                'oi_chg': oi_chg,
+                'oi_chg_percent': round(oi_chg_percent, 2)
             })
         
         return jsonify({
@@ -180,22 +371,39 @@ def get_stock_data():
     expiry = request.args.get('expiry')
     date = request.args.get('date')
     
+    print(f"\n{'='*80}")
+    print(f"📊 GET_STOCK_DATA called:")
+    print(f"   Ticker: {ticker}")
+    print(f"   Mode: {mode}")
+    print(f"   Expiry: {expiry}")
+    print(f"   Date: {date}")
+    print(f"{'='*80}")
+    
     try:
-        # Get expiry dates from CSV
-        expiry_dates = get_expiry_dates_for_ticker(ticker)
+        # Get expiry dates that have data for the selected date
+        if date:
+            expiry_dates = get_expiry_dates_for_ticker_and_date(ticker, date)
+        else:
+            expiry_dates = get_expiry_dates_for_ticker(ticker)
+        
+        print(f"✅ Found {len(expiry_dates)} expiry dates for {ticker}")
         
         # If no expiry specified, use the first one
         if not expiry and expiry_dates:
             expiry = expiry_dates[0]
+            print(f"📌 No expiry specified, using first: {expiry}")
         
         # Determine which date to use
         if mode == 'latest':
             available_dates = get_available_dates()
             if not available_dates:
+                print(f"❌ No dates available in cache")
                 return jsonify({'error': 'No dates available'}), 404
             query_date = available_dates[0]
+            print(f"📅 Using latest date: {query_date}")
         else:
             query_date = date if date else get_available_dates()[0]
+            print(f"📅 Using historical date: {query_date}")
         
         # Get data from database
         table_name = f"TBL_{ticker}_DERIVED"
@@ -203,7 +411,24 @@ def get_stock_data():
         # Check if table exists
         inspector = inspect(engine)
         if table_name not in inspector.get_table_names():
+            print(f"❌ Table {table_name} not found")
             return jsonify({'error': f'Ticker {ticker} not found'}), 404
+        
+        print(f"✅ Table {table_name} exists")
+        
+        # First check if data exists for this date
+        check_query = f"""
+        SELECT COUNT(*) as count
+        FROM "{table_name}"
+        WHERE "BizDt" = :date
+        """
+        check_result = pd.read_sql(text(check_query), engine, params={"date": query_date})
+        row_count = check_result.iloc[0]['count']
+        print(f"📊 Found {row_count} rows for date {query_date}")
+        
+        if row_count == 0:
+            print(f"❌ No data for date {query_date}")
+            return jsonify({'error': f'No data found for date {query_date}'}), 404
         
         # Get option chain data
         query = f"""
@@ -227,15 +452,20 @@ def get_stock_data():
         
         if expiry and expiry != 'all':
             query += " AND \"FininstrmActlXpryDt\" = :expiry"
+            print(f"📌 Filtering by expiry: {expiry}")
             df = pd.read_sql(text(query), engine, params={"date": query_date, "expiry": expiry})
         else:
             df = pd.read_sql(text(query), engine, params={"date": query_date})
             if not df.empty:
                 df['FininstrmActlXpryDt'] = pd.to_datetime(df['FininstrmActlXpryDt'], errors='coerce')
                 nearest_expiry = df['FininstrmActlXpryDt'].min()
+                print(f"📌 No expiry filter, using nearest: {nearest_expiry}")
                 df = df[df['FininstrmActlXpryDt'] == nearest_expiry]
         
+        print(f"📊 Query returned {len(df)} rows")
+        
         if df.empty:
+            print(f"❌ DataFrame is empty after filtering")
             return jsonify({'error': 'No data found for selected parameters'}), 404
         
         # Convert columns to numeric
@@ -270,23 +500,32 @@ def get_stock_data():
         return jsonify({'error': str(e)}), 500
 
 def get_expiry_dates_for_ticker(ticker):
-    """Get expiry dates from CSV or database for a specific ticker"""
+    """Get expiry dates from database for a specific ticker"""
     try:
-        # First try CSV
-        df = pd.read_csv(CSV_PATH)
-        ticker_df = df[df['name'] == ticker].copy()
-        
-        if not ticker_df.empty:
-            ticker_df['expiry'] = pd.to_datetime(ticker_df['expiry'], errors='coerce')
-            ticker_df = ticker_df.dropna(subset=['expiry'])
-            expiry_dates = sorted(ticker_df['expiry'].dt.strftime('%Y-%m-%d').unique())
-            if expiry_dates:
-                return expiry_dates
-        
-        # If CSV doesn't have data, get from database
         table_name = f"TBL_{ticker}_DERIVED"
         inspector = inspect(engine)
+        
         if table_name in inspector.get_table_names():
+            # First check what we have in the table
+            count_query = f"""
+            SELECT COUNT(DISTINCT "FininstrmActlXpryDt") as expiry_count
+            FROM "{table_name}"
+            WHERE "FininstrmActlXpryDt" IS NOT NULL
+            """
+            count_result = pd.read_sql(text(count_query), engine)
+            print(f"\n🔍 {ticker}: Found {count_result.iloc[0]['expiry_count']} unique expiry dates in database")
+            
+            # Check sample expiry date format
+            sample_query = f"""
+            SELECT DISTINCT "FininstrmActlXpryDt" as sample_expiry
+            FROM "{table_name}"
+            WHERE "FininstrmActlXpryDt" IS NOT NULL
+            LIMIT 5
+            """
+            sample_result = pd.read_sql(text(sample_query), engine)
+            if not sample_result.empty:
+                print(f"📝 Sample expiry formats in DB: {sample_result['sample_expiry'].tolist()}")
+            
             query = f"""
             SELECT DISTINCT "FininstrmActlXpryDt"
             FROM "{table_name}"
@@ -294,14 +533,20 @@ def get_expiry_dates_for_ticker(ticker):
             ORDER BY "FininstrmActlXpryDt"
             """
             result = pd.read_sql(text(query), engine)
+            
             if not result.empty:
                 result['FininstrmActlXpryDt'] = pd.to_datetime(result['FininstrmActlXpryDt'], errors='coerce')
                 expiry_dates = [d.strftime('%Y-%m-%d') for d in result['FininstrmActlXpryDt'] if pd.notna(d)]
+                print(f"📅 {ticker}: Returning {len(expiry_dates)} expiry dates: {expiry_dates[:5]}..." if len(expiry_dates) > 5 else f"📅 {ticker}: Returning {len(expiry_dates)} expiry dates: {expiry_dates}")
                 return expiry_dates
+            else:
+                print(f"⚠️ {ticker}: Query returned empty result")
+        else:
+            print(f"❌ {ticker}: Table {table_name} does not exist")
         
         return []
     except Exception as e:
-        print(f"Error getting expiry dates: {e}")
+        print(f"❌ Error getting expiry dates for {ticker}: {e}")
         return []
 
 def build_option_chain(df):
@@ -313,16 +558,32 @@ def build_option_chain(df):
         ce_data = df[(df['StrkPric'] == strike) & (df['OptnTp'] == 'CE')]
         pe_data = df[(df['StrkPric'] == strike) & (df['OptnTp'] == 'PE')]
         
+        # Get IV columns (last 4 float columns named 'iv')
+        call_iv = 0
+        put_iv = 0
+        if not ce_data.empty and 'iv' in ce_data.columns:
+            call_iv = float(ce_data['iv'].iloc[0]) if pd.notna(ce_data['iv'].iloc[0]) else 0
+            # Scale IV if it's in 0-1 range (multiply by 100)
+            if 0 < call_iv < 1:
+                call_iv = call_iv * 100
+        if not pe_data.empty and 'iv' in pe_data.columns:
+            put_iv = float(pe_data['iv'].iloc[0]) if pd.notna(pe_data['iv'].iloc[0]) else 0
+            # Scale IV if it's in 0-1 range (multiply by 100)
+            if 0 < put_iv < 1:
+                put_iv = put_iv * 100
+        
         row = {
             'strike': float(strike),
             'call_oi': float(ce_data['OpnIntrst'].iloc[0]) if not ce_data.empty else 0,
             'call_oi_chg': float(ce_data['ChngInOpnIntrst'].iloc[0]) if not ce_data.empty else 0,
             'call_volume': float(ce_data['TtlTradgVol'].iloc[0]) if not ce_data.empty else 0,
             'call_price': float(ce_data['LastPric'].iloc[0]) if not ce_data.empty else 0,
+            'call_iv': call_iv,
             'put_price': float(pe_data['LastPric'].iloc[0]) if not pe_data.empty else 0,
             'put_volume': float(pe_data['TtlTradgVol'].iloc[0]) if not pe_data.empty else 0,
             'put_oi_chg': float(pe_data['ChngInOpnIntrst'].iloc[0]) if not pe_data.empty else 0,
             'put_oi': float(pe_data['OpnIntrst'].iloc[0]) if not pe_data.empty else 0,
+            'put_iv': put_iv,
         }
         option_chain.append(row)
     
@@ -489,116 +750,6 @@ def get_fallback_chart_data(ticker, end_date, options_df):
         }]
     except Exception as e:
         print(f"Error in fallback chart data: {e}")
-        return []
-    """Get historical intraday price data using yfinance"""
-    try:
-        import yfinance as yf
-        from datetime import datetime, timedelta
-        
-        # Map ticker to Yahoo Finance symbol
-        yahoo_ticker_map = {
-            'NIFTY': '^NSEI',
-            'BANKNIFTY': '^NSEBANK',
-            'FINNIFTY': 'NIFTY_FIN_SERVICE.NS'
-        }
-        
-        yahoo_symbol = yahoo_ticker_map.get(ticker, f"{ticker}.NS")
-        
-        # Parse the end_date
-        if isinstance(end_date, str):
-            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
-        else:
-            end_dt = end_date
-        
-        # For dates in the past, get intraday data
-        start_dt = end_dt
-        end_dt_plus = end_dt + timedelta(days=1)
-        
-        print(f"Fetching yfinance data for {yahoo_symbol} on {end_date}...")
-        
-        # Download intraday data
-        stock = yf.Ticker(yahoo_symbol)
-        df = stock.history(start=start_dt, end=end_dt_plus, interval='5m')
-        
-        if df.empty:
-            print(f"⚠️ No yfinance data for {yahoo_symbol} on {end_date}. Using fallback.")
-            return get_price_data_from_db(ticker, end_date)
-        
-        print(f"✅ Got {len(df)} data points from yfinance")
-        
-        # Prepare data for chart
-        price_data = []
-        
-        for timestamp, row in df.iterrows():
-            # Convert timestamp to Unix timestamp (seconds since epoch)
-            unix_timestamp = int(timestamp.timestamp())
-            
-            price_data.append({
-                'time': unix_timestamp,
-                'open': float(row['Open']),
-                'high': float(row['High']),
-                'low': float(row['Low']),
-                'close': float(row['Close']),
-                'volume': float(row['Volume'])
-            })
-        
-        return price_data
-        
-    except ImportError:
-        print("⚠️ yfinance not installed. Install with: pip install yfinance")
-        print("   Falling back to database data...")
-        return get_price_data_from_db(ticker, end_date)
-    except Exception as e:
-        print(f"⚠️ Error getting yfinance data: {e}")
-        print("   Falling back to database data...")
-        return get_price_data_from_db(ticker, end_date)
-
-def get_price_data_from_db(ticker, end_date):
-    """Fallback: Get price data from database"""
-    try:
-        from datetime import datetime
-        
-        table_name = f"TBL_{ticker}_DERIVED"
-        
-        query = f"""
-        SELECT 
-            "BizDt",
-            "UndrlygPric"
-        FROM "{table_name}"
-        WHERE "BizDt" = :end_date
-        LIMIT 1
-        """
-        
-        df = pd.read_sql(text(query), engine, params={"end_date": end_date})
-        
-        if df.empty:
-            return []
-        
-        df['UndrlygPric'] = pd.to_numeric(df['UndrlygPric'], errors='coerce')
-        
-        price = float(df['UndrlygPric'].iloc[0])
-        
-        # Parse date and create timestamp for 3:30 PM
-        if isinstance(end_date, str):
-            date_obj = datetime.strptime(end_date, '%Y-%m-%d')
-        else:
-            date_obj = end_date
-        
-        # Set time to 15:30 (market close)
-        date_obj = date_obj.replace(hour=15, minute=30, second=0)
-        unix_timestamp = int(date_obj.timestamp())
-        
-        # Return single data point as OHLC
-        return [{
-            'time': unix_timestamp,
-            'open': price,
-            'high': price,
-            'low': price,
-            'close': price,
-            'volume': 0
-        }]
-    except Exception as e:
-        print(f"Error getting DB price data: {e}")
         return []
 
 @app.route('/get_historical_data')

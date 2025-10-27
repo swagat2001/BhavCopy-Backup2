@@ -60,16 +60,28 @@
 </style>
 </head>
 <body>
-<div class="container">
-<div class="header">
-<h1>📊 Options Analysis Dashboard</h1>
-<div class="date" id="dateDisplay">Select date and click Load Data</div>
+<div class="container" style="display: flex; align-items: center;  padding: 10px 20px;">
+<div class="header" >
+    <!-- Left side: Logo -->
+    <img src="{{ url_for('static', filename='image/Goldmine-logo.png') }}"
+         alt="Goldmine logo"
+         style="height: 60px;">
+
+    <!-- Right side: Title -->
+    
+</div>
+<div>
+    <h1 style="margin-left: 450px; font-size: 32px; font-weight: 600;">Derivatives Analysis Dashboard</h1>
+    
+</div>
+
 </div>
 
 <div class="controls">
 <div class="date-selector">
 <select id="currentDate"></select>
 <button onclick="loadData()">🔄 Load Data</button>
+<div  id="dateDisplay" >Select date and click Load Data</div>
 </div>
 <div class="tabs">
 <button class="tab active" onclick="showTab('total')">📊 TOTAL</button>
